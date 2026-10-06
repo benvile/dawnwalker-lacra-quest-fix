@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dawnwalker-lacra-fix"
+version = "0.1.0"
+description = "Offline save repair tool for the Lacra quest line in The Blood of Dawnwalker"
+authors = [{ name = "sonervous7" }]
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSES/*"]
+dependencies = ["xxhash>=3.5,<4", "pyooz==0.0.8"]
+
+[project.urls]
+Repository = "https://github.com/sonervous7/dawnwalker-lacra-quest-fix"
+Issues = "https://github.com/sonervous7/dawnwalker-lacra-quest-fix/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<9", "ruff>=0.12,<1"]
+gui = ["PySide6_Essentials>=6.8,<7"]
+build = ["pyinstaller>=6.11,<7"]
+
+[project.scripts]
+dawnwalker-lacra = "dawnwalker_lacra.cli:main"
+dawnwalker-lacra-gui = "dawnwalker_lacra.gui:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dawnwalker_lacra"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--basetemp=.private/pytest-temp", "-p", "no:cacheprovider"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

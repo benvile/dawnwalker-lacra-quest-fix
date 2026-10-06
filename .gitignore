@@ -1,0 +1,26 @@
+# Private game saves and forensic material
+.private/
+RELEASE_CHECKLIST.md
+*.sav
+*.meta
+*.png
+!assets/*.png
+*.decoded.bin
+*.inspection.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+*.spec
+
+# IDE and OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
