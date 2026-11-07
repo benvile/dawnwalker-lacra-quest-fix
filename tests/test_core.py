@@ -1,10 +1,21 @@
 import os
+import struct
 from pathlib import Path
 
 import pytest
 
-from dawnwalker_lacra.core import PyOozDecoder, Save, SaveError, analyze, pack, packed, repair
-from dawnwalker_lacra.slots import add, first_free_slot, patch_in_place, recover
+from dawnwalker_lacra.core import (
+    PyOozDecoder,
+    Save,
+    SaveError,
+    analyze,
+    encode_journal,
+    journal,
+    pack,
+    packed,
+    repair,
+)
+from dawnwalker_lacra.slots import _validate_meta, add, first_free_slot, patch_in_place, recover
 
 ROOT = Path(__file__).parents[1]
 PRIVATE = ROOT / ".private" / "poc90"
@@ -29,6 +40,52 @@ def test_packed_round_trip(value):
 def test_packed_rejects_truncation():
     with pytest.raises(SaveError):
         packed(b"\x01", 0)
+
+
+def test_journal_preserves_category_three_rows():
+    class JournalFixture:
+        names = ("first", "second", "third")
+
+        @staticmethod
+        def prefix(_section):
+            body = bytearray()
+            for rows in (
+                [(1, 1)],
+                [(2, 2), (3, 3)],
+            ):
+                body += len(rows).to_bytes(4, "little")
+                for kind, name_index in rows:
+                    body.append(kind)
+                    for fmt, value in (("I", 11), ("Q", 12), ("I", 13), ("B", 1)):
+                        body += (1).to_bytes(2, "little")
+                        body += struct.pack("<" + fmt, value)
+                    body += pack(name_index)
+                    body.append(2)
+            return bytes(body) + b"tail"
+
+    groups, tail = journal(JournalFixture())
+
+    assert [[row["kind"] for row in group] for group in groups] == [[1], [2, 3]]
+    assert tail == b"tail"
+    assert encode_journal(groups, tail, JournalFixture.names) == JournalFixture.prefix("Journal")
+
+
+@pytest.mark.parametrize("version", [134, 136])
+def test_metadata_accepts_supported_save_versions(version):
+    _validate_meta(
+        {"SaveName": "ManualSave3", "SaveVersion": version,
+         "GameVersion": 5, "BuildVersion": 258504},
+        "ManualSave3",
+    )
+
+
+def test_metadata_rejects_unverified_save_version():
+    with pytest.raises(SaveError, match="metadata version"):
+        _validate_meta(
+            {"SaveName": "ManualSave3", "SaveVersion": 135,
+             "GameVersion": 5, "BuildVersion": 258504},
+            "ManualSave3",
+        )
 
 
 def test_game_verified_save_is_structurally_valid_and_progressed():

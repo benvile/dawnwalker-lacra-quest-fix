@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from . import profile
 from .core import Decoder, Save, repair, require
 
 SLOT = re.compile(r"^ManualSave(\d+)\.sav$", re.IGNORECASE)
@@ -89,9 +90,11 @@ def _sha256(path: Path) -> str:
 
 def _validate_meta(meta: dict, stem: str) -> None:
     require(meta.get("SaveName") == stem, "Meta.SaveName does not match the source slot")
-    require(meta.get("SaveVersion") == 134 and meta.get("GameVersion") == 5,
+    require(meta.get("SaveVersion") in profile.SUPPORTED_SAVE_VERSIONS
+            and meta.get("GameVersion") == profile.SUPPORTED_GAME_VERSION,
             "Unsupported save metadata version")
-    require(meta.get("BuildVersion") == 258504, "Unsupported game build metadata")
+    require(meta.get("BuildVersion") == profile.SUPPORTED_BUILD_VERSION,
+            "Unsupported game build metadata")
 
 
 def _write_manifest(path: Path, value: dict) -> None:

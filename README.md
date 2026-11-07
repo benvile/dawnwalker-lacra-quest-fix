@@ -22,7 +22,10 @@ when it is available. It works entirely offline and does not upload save data.
 ## Supported saves and safety
 
 - Windows x64 and manual saves only.
-- Tested profile: `SaveVersion 134`, `GameVersion 5`, `BuildVersion 258504`.
+- Supported profiles: `SaveVersion 134` and `136`, with `GameVersion 5` and
+  `BuildVersion 258504`. Version 136 was checked against before-quest,
+  good-outcome, and broken-outcome samples, and repaired copies from two broken
+  saves were confirmed working in game.
 - ADD creates a new slot and leaves the source files unchanged.
 - PATCH is an advanced in-place mode. It creates a verified backup first.
 - Unknown versions, layouts, quest outcomes, and already-progressed saves are

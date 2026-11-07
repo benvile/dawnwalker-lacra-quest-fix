@@ -306,7 +306,8 @@ def journal(save: Save):
             require(pos < len(body), "Truncated journal")
             kind = body[pos]
             pos += 1
-            require(kind == group_index + 1, "Unexpected journal category")
+            valid_kinds = {1} if group_index == 0 else {2, 3}
+            require(kind in valid_kinds, "Unexpected journal category")
             arrays = []
             for fmt in ("I", "Q", "I", "B"):
                 count = uint(body, pos, "H")
@@ -403,10 +404,10 @@ class Analysis:
 
 
 def analyze(save: Save) -> Analysis:
-    if (save.save_version, save.game_version) != (
-        profile.SUPPORTED_SAVE_VERSION, profile.SUPPORTED_GAME_VERSION
-    ):
-        return Analysis("unsupported", "Only DSAV SaveVersion 134 / GameVersion 5 is supported")
+    if (save.save_version not in profile.SUPPORTED_SAVE_VERSIONS
+            or save.game_version != profile.SUPPORTED_GAME_VERSION):
+        versions = " or ".join(map(str, profile.SUPPORTED_SAVE_VERSIONS))
+        return Analysis("unsupported", f"Only DSAV SaveVersion {versions} / GameVersion 5 is supported")
     current_facts = facts(save)
     if current_facts.get(0x97A42C79) == 1:
         return Analysis("already_progressed", "Lacra cooperation is already present")
@@ -414,7 +415,8 @@ def analyze(save: Save) -> Analysis:
     all_assets = {row["asset"] for rows in groups for row in rows}
     if profile.URIASHES in all_assets:
         return Analysis("already_progressed", "Song of the Mountain is already in the journal")
-    mismatches = [key for key, expected in profile.FACT_PRECONDITIONS.items()
+    fact_preconditions = profile.FACT_PRECONDITIONS_BY_SAVE_VERSION[save.save_version]
+    mismatches = [key for key, expected in fact_preconditions.items()
                   if current_facts.get(key) != expected]
     if mismatches:
         return Analysis("unsupported_branch", "Fact profile differs: " + ", ".join(f"{x:08x}" for x in mismatches))
@@ -439,7 +441,9 @@ def analyze(save: Save) -> Analysis:
         return Analysis("unsupported_layout", "Destination anchor is missing")
     if offset + 36 > len(persist):
         return Analysis("unsupported_layout", "Lacra actor stub is truncated")
-    if persist[offset + 32:offset + 36] not in {bytes.fromhex("ff1b0001"), bytes.fromhex("ff1a0001")}:
+    if persist[offset + 32:offset + 36] not in profile.SOURCE_LIFECYCLE_STATES_BY_SAVE_VERSION[
+        save.save_version
+    ]:
         return Analysis("unsupported_layout", "Unknown Lacra lifecycle layout")
     _, rows, _ = ai_rows(save)
     own = [row for row in rows if uint(row, 0) == handle]
@@ -450,9 +454,8 @@ def analyze(save: Save) -> Analysis:
     # post-choice saves (and in the controlled bad branch). The discriminator,
     # layout marker, and trailing fields stay fixed. Validate those structural
     # bytes instead of pinning a single momentary AI state from ManualSave23.
-    if len(ai_state) != 12 or ai_state[0] != 2 or ai_state[4:] != bytes.fromhex(
-        "0800100000000000"
-    ):
+    if (len(ai_state) != 12 or ai_state[0] != 2
+            or ai_state[4:] != profile.AI_SOURCE_SUFFIX_BY_SAVE_VERSION[save.save_version]):
         return Analysis("unsupported_layout", "Unknown Lacra AI record layout")
     return Analysis("repair_available", "Tested release-Nish branch detected", handle)
 
@@ -517,8 +520,9 @@ def repair(save: Save) -> tuple[bytes, dict]:
         extra_names.append(profile.URIASHES)
 
     current_facts = facts(save)
+    fact_targets = profile.FACT_TARGETS_BY_SAVE_VERSION[save.save_version]
     fact_changes = []
-    for key, target in profile.FACT_TARGETS.items():
+    for key, target in fact_targets.items():
         old = current_facts.get(key)
         if target is None:
             current_facts.pop(key, None)
@@ -532,7 +536,7 @@ def repair(save: Save) -> tuple[bytes, dict]:
 
     body, count_pos, paths, _mapping, entries, tail = runtime(save)
     new_paths = [path for path in profile.Q103_PATHS if path not in paths]
-    for entry in profile.Q103_ENTRIES:
+    for entry in profile.Q103_ENTRIES_BY_SAVE_VERSION[save.save_version]:
         if entry in entries:
             continue
         free = next((index for index, item in enumerate(entries)
@@ -559,13 +563,14 @@ def repair(save: Save) -> tuple[bytes, dict]:
     ) + suffix
 
     groups, journal_tail = journal(save)
-    groups[0].append(deepcopy(profile.URIASHES_RECORD))
+    uriashes_record = deepcopy(profile.URIASHES_RECORD)
+    timestamps = profile.URIASHES_TIMESTAMPS_BY_SAVE_VERSION.get(save.save_version)
+    if timestamps:
+        uriashes_record["arrays"][1][:2] = timestamps
+    groups[0].append(uriashes_record)
     investigation = next(row for row in groups[1] if row["asset"] == profile.INVESTIGATION)
     investigation["flag"] = 1
-    target_journal_nodes = {
-        3003987295: (639264192843590000, 0, 2),
-        2470566236: (639269119695900000, 0, 2),
-    }
+    target_journal_nodes = profile.JOURNAL_TARGET_NODES_BY_SAVE_VERSION[save.save_version]
     for node_id, (timestamp, value, status) in target_journal_nodes.items():
         require(node_id in investigation["arrays"][0], f"Missing investigation node {node_id}")
         index = investigation["arrays"][0].index(node_id)
@@ -580,27 +585,39 @@ def repair(save: Save) -> tuple[bytes, dict]:
     new_lacra = b"\x02\x00" + identity + b"\x00\x00\x01\x00" + struct.pack("<I", handle) + b"\x00\x00"
     replacements[lacra_node.ident] = save.raw[lacra_node.start + 4:lacra_offset] + new_lacra
     victim_node, victim_offset, victim_data = comm[profile.VICTIM]
-    replacements[victim_node.ident] = save.raw[victim_node.start + 4:victim_offset] + b"\x00\x00" + victim_data[2:]
+    if save.save_version == 136:
+        victim_handle = handle + 2
+        victim_state = (
+            b"\x00\x00" + victim_data[2:7] + b"\x00\x00\x01\x00"
+            + struct.pack("<I", victim_handle) + b"\x00\x00"
+        )
+    else:
+        victim_state = b"\x00\x00" + victim_data[2:]
+    replacements[victim_node.ident] = save.raw[victim_node.start + 4:victim_offset] + victim_state
 
     persist, actor_offset, anchors = actor_stub(save, handle)
     new_persist = bytearray(persist)
-    actor_state = profile.PLACEMENT + struct.pack("<I", anchors[profile.ANCHOR_GUID]) + profile.LIFECYCLE
+    actor_state = (
+        profile.PLACEMENT_BY_SAVE_VERSION[save.save_version]
+        + struct.pack("<I", anchors[profile.ANCHOR_GUID])
+        + profile.LIFECYCLE_BY_SAVE_VERSION[save.save_version]
+    )
     new_persist[actor_offset:actor_offset + 36] = actor_state
     replacements[save.sections["PersistencySystemImpl"].ident] = bytes(new_persist)
 
     pre, ai, ai_suffix = ai_rows(save)
     indexes = [index for index, row in enumerate(ai) if uint(row, 0) == handle]
     require(len(indexes) == 1, "Ambiguous Lacra AI record")
-    ai[indexes[0]] = struct.pack("<I", handle) + profile.AI_TAIL
+    ai[indexes[0]] = struct.pack("<I", handle) + profile.AI_TAIL_BY_SAVE_VERSION[save.save_version]
     replacements[save.sections["RebelAISubsystem"].ident] = pre + struct.pack("<H", len(ai))
     replacements[save.sections["RebelAISubsystem"].ident] += b"".join(ai) + ai_suffix
 
     result_bytes, expected_raw = _build(save, replacements, extra_names)
     result = Save(result_bytes)
     require(result.raw == expected_raw, "Stored DSAV round-trip mismatch")
-    validate(save, result, set(profile.FACT_TARGETS))
+    validate(save, result, set(fact_targets))
     return result_bytes, {
-        "profile": "q103-release-nish-to-continuation-v1",
+        "profile": f"q103-release-nish-to-continuation-v1-save{save.save_version}",
         "source_sha256": save.sha256,
         "output_sha256": result.sha256,
         "facts": fact_changes,
